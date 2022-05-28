@@ -1,0 +1,66 @@
+site_name: FetchBoostContent
+site_url: https://alandefreitas.github.io/FetchBoostContent/
+repo_url: https://github.com/alandefreitas/FetchBoostContent/
+repo_name: alandefreitas/FetchBoostContent
+site_description: "FetchBoostContent: FetchContent for Boost libraries"
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Declare: declare.md
+  - Proposals: proposals.md
+  - Populate: populate.md
+  - MakeAvailable: make_available.md
+  - Linking: linking.md
+  - Options: options.md
+  - Contributing: contributing.md
+  - Acknowledgments: acknowledgments.md
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  palette:
+    scheme: boost_fetch_content
+  icon:
+    repo: fontawesome/brands/git-alt
+    logo: fontawesome/solid/code
+
+edit_uri: ""
+
+plugins:
+  - search
+  - macros:
+      module_name: docs/macros
+      include_dir: ..
+
+extra:
+  analytics:
+    provider: google
+    property: G-316978479
+
+copyright: Copyright &copy; Alan Freitas
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      use_pygments: true
+      linenums: false
+      linenums_style: pymdownx.inline
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets
+  - pymdownx.arithmatex:
+      generic: true
+  - meta
+
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+  - https://media.ethicalads.io/media/client/ethicalads.min.js
+  - javascripts/extra.js
+
+extra_css:
+  - stylesheets/extra.css

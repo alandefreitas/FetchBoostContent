@@ -1,0 +1,90 @@
+name: Build
+
+# Only recompile if source files have been changed
+on:
+  push:
+    paths:
+      - '**.c'
+      - '**.cpp'
+      - '**.h'
+      - '**.hpp'
+      - '**.ipp'
+      - '**.cmake'
+      - '**/CMakeLists.txt'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - '**.c'
+      - '**.cpp'
+      - '**.h'
+      - '**.hpp'
+      - '**.ipp'
+      - '**.cmake'
+      - '**/CMakeLists.txt'
+      - '.github/workflows/build.yml'
+
+# Define a group for each git reference. Only a single workflow for the group will run at a time.
+concurrency:
+  group: ${{format('{0}:{1}', github.repository, github.ref)}}
+  cancel-in-progress: true
+
+jobs:
+  Build:
+    strategy:
+      # Cancels all in-progress jobs if any job fails
+      fail-fast: true
+      matrix:
+        config:
+          - {
+            name: "Windows-MSVC/2019/Static/X64/Release",
+            os: windows-2019,
+            config: Release,
+            cmake_extra_args: -G "Visual Studio 16 2019" -A x64 -DCMAKE_CXX_FLAGS="/O2",
+            sudocmd: "",
+            artifact_name: "Windows x64",
+            cores: 2,
+            build_single_header: "OFF",
+          }
+          - {
+            name: "Ubuntu/20.04/Static/X64/Release",
+            os: ubuntu-20.04,
+            config: Release,
+            cmake_extra_args: "-DCMAKE_C_COMPILER=/usr/bin/gcc-10 -DCMAKE_CXX_COMPILER=/usr/bin/g++-10  -DCMAKE_CXX_FLAGS=\"-O2\"",
+            sudocmd: "sudo",
+            artifact_name: "Linux",
+            cores: 2,
+            build_single_header: "ON",
+          }
+          - {
+            name: "MacOSX/10.15/Static/X64/Release",
+            os: macos-10.15,
+            config: Release,
+            cmake_extra_args: "-DCMAKE_CXX_FLAGS=\"-O2\"",
+            sudocmd: "sudo",
+            artifact_name: "MacOSX",
+            cores: 4,
+            build_single_header: "OFF",
+          }
+
+    timeout-minutes: 120
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    container: ${{matrix.config.container}}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+      - name: Create Build Dir
+        run: mkdir build
+      - name: Configure
+        working-directory: ./build
+        run: |
+          cmake .. ${{ matrix.config.cmake_extra_args }} -D CMAKE_BUILD_TYPE=${{ matrix.config.config }} -D CMAKE_DISABLE_FIND_PACKAGE_Boost=ON -D FETCH_BOOST_CONTENT_VERBOSE=2
+      - name: Build
+        working-directory: ./build
+        run: cmake --build . --parallel ${{ matrix.config.cores }} --config ${{ matrix.config.config }}
+      - name: Archive Script as is
+        if: ${{ matrix.config.build_single_header == 'ON' }}
+        uses: kittaakos/upload-artifact-as-is@v0
+        with:
+          path: cmake/FetchBoostContent.cmake

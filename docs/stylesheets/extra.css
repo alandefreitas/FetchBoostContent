@@ -1,0 +1,10 @@
+[data-md-color-scheme="boost_fetch_content"] {
+    --md-primary-fg-color: #3c593b;
+    --md-primary-fg-color--light: #598257;
+    --md-primary-fg-color--dark: #2a3f2a;
+    --md-typeset-a-color: var(--md-primary-fg-color--light);
+    --md-accent-fg-color: #b4341f;
+    --md-accent-fg-color--transparent: rgba(180, 52, 31, 0.25);
+    --md-accent-bg-color:                hsla(0, 0%, 100%, 1);
+    --md-accent-bg-color--light:         hsla(0, 0%, 100%, 0.7);
+}

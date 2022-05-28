@@ -1,0 +1,32 @@
+name: Publish Docs
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  generateDOC:
+    name: Publish Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Update Contributors
+        uses: akhilmhdh/contributors-readme-action@v2.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          image_size: 100
+          columns_per_row: 6
+          readme_path: docs/acknowledgments.md
+        continue-on-error: true
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.x
+      - name: Install Mkdocs Material
+        run: pip install mkdocs-material
+      - name: Install Macros for Mkdocs
+        run: pip install mkdocs-macros-plugin
+      - name: Deploy mkdocs to gh-pages branch
+        run: mkdocs gh-deploy --force
