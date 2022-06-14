@@ -153,6 +153,8 @@ function(FetchBoostContent_Populate name)
             FETCH_BOOST_CONTENT_IGNORE ignore ""
             # "additional subdirectory to scan; can be repeated"
             FETCH_BOOST_CONTENT_INCLUDE include ""
+            # "ignore cache"
+            FETCH_BOOST_CONTENT_IGNORE_CACHE ignore_cache 0
             )
     while (PopulateOptions)
         list(POP_FRONT PopulateOptions Option Variable Default)
@@ -336,7 +338,7 @@ function(FetchBoostContent_Populate name)
 
         # Try to use the cache file first
         set(cache_file ${dir}/dependencies.txt)
-        if (EXISTS ${cache_file})
+        if (EXISTS ${cache_file} AND NOT ignore_cache)
             file(READ ${cache_file} module_deps)
             foreach (mod ${module_deps})
                 if (NOT mod IN_LIST deps)
@@ -402,7 +404,7 @@ function(FetchBoostContent_Populate name)
         endforeach ()
 
         # Cache dependencies for this module dir
-        if (NOT EXISTS ${cache_file})
+        if (NOT EXISTS ${cache_file} AND NOT ignore_cache)
             file(WRITE ${dir}/dependencies.txt "${module_deps}")
         endif ()
 
