@@ -155,6 +155,8 @@ function(FetchBoostContent_Populate name)
             FETCH_BOOST_CONTENT_INCLUDE include ""
             # "ignore cache"
             FETCH_BOOST_CONTENT_IGNORE_CACHE ignore_cache 0
+            # "prune transitive dependencies"
+            FETCH_BOOST_CONTENT_PRUNE_DEPENDENCIES prune_dependencies OFF
             )
     while (PopulateOptions)
         list(POP_FRONT PopulateOptions Option Variable Default)
@@ -292,7 +294,7 @@ function(FetchBoostContent_Populate name)
     # Function to scan module dependencies
     function(module_for_header header OUT_VARIABLE)
         if (header IN_LIST exception_headers)
-            set(${OUT_VARIABLE} ${exception_${header}})
+            set(${OUT_VARIABLE} boost_${exception_${header}} PARENT_SCOPE)
         else ()
             # Identify modules from include, but we cannot ensure ${m} is a module
             # because we don't have access to the super-project here
@@ -321,7 +323,9 @@ function(FetchBoostContent_Populate name)
 
     function(scan_directory module dir)
         # Parse arguments
-        cmake_parse_arguments(ARG "" "" "DEPS" ${ARGN})
+        vprint(1 "Scanning module ${module}")
+        set(multiValueArgs DEPS SCAN_ONLY)
+        cmake_parse_arguments(ARG "" "" "${multiValueArgs}" ${ARGN})
         vprint(1 "Scanning directory ${dir}")
         if (NOT ARG_DEPS)
             message(FATAL_ERROR "scan_directory: no DEPS argument")
@@ -329,11 +333,22 @@ function(FetchBoostContent_Populate name)
             set(deps ${ARG_DEPS})
         endif ()
 
+        # Scanning include dir
+        if (dir MATCHES "/include$")
+            set(scanning_include_dir ON)
+        endif()
+
+        # Optimization:
+        # Scan only the headers we are actually including
+        set(scan_only ${ARG_SCAN_ONLY})
+
         # Optimization:
         # Dependencies are moved to front of the list so they
         # represent what targets should be created first.
         # This is list of deps we have already moved before the
-        # current ${module}
+        # current ${module}.
+        # One thing to notice is, theoretically, the order of
+        # these targets shouldn't matter in CMake.
         set(moved_deps ${module})
 
         # Try to use the cache file first
@@ -362,46 +377,81 @@ function(FetchBoostContent_Populate name)
             return()
         endif ()
 
+        # Create list of files we are going to scan
+        if (scan_only)
+            foreach (file ${scan_only})
+                list(APPEND files "${dir}/${file}")
+            endforeach()
+            vprint(2 "Scan only ${scan_only}")
+        else()
+            file(GLOB_RECURSE files "${dir}/*")
+        endif()
+        set(scanned_files ${files})
+
         # Scan files for dependencies the first time
-        file(GLOB_RECURSE files "${dir}/*")
-        foreach (file ${files})
-            set(fn ${file})
-            file(RELATIVE_PATH rel_fn ${dir} ${fn})
-            vprint(2 "Scanning file ${rel_fn}")
-            # Scan header dependencies
-            file(READ "${fn}" f)
-            string(REGEX REPLACE ";" "\\\\;" f "${f}")
-            string(REGEX REPLACE "\n" ";" f "${f}")
-            foreach (line ${f})
-                string(STRIP "${line}" line)
-                string(REGEX MATCH "[ \\t]*#[ \\t]*include[ \\t]*[\"<](boost/[^\">]*)[\">]" _ "${line}")
-                if (CMAKE_MATCH_COUNT)
-                    set(h ${CMAKE_MATCH_1})
-                    module_for_header(${h} mod)
-                    if (mod)
-                        if (NOT mod IN_LIST module_deps)
-                            list(APPEND module_deps ${mod})
-                        endif ()
-                        if (NOT mod IN_LIST deps)
-                            vprint(1 "Adding dependency ${mod}")
-                            list(PREPEND deps ${mod} 0)
-                        elseif (NOT mod IN_LIST moved_deps)
-                            # ensure dep comes before module to indicate dependency
-                            list(FIND deps ${module} this_idx)
-                            list(FIND deps ${mod} idx)
-                            if (idx GREATER this_idx)
-                                vprint(1 "Moving dependency ${mod} (${file})")
-                                list(REMOVE_AT deps ${idx})
-                                list(GET deps ${idx} v)
-                                list(REMOVE_AT deps ${idx})
-                                list(PREPEND deps ${mod} ${v})
-                                list(APPEND moved_deps ${mod})
+        while (files)
+            set(next_files)
+            foreach (file ${files})
+                list(APPEND scanned_files ${file})
+                file(RELATIVE_PATH relative_path ${dir} ${file})
+                vprint(2 "Scanning file ${relative_path}")
+
+                # Scan header dependencies
+                file(READ "${file}" contents)
+                string(REGEX REPLACE ";" "\\\\;" contents "${contents}")
+                string(REGEX REPLACE "\n" ";" contents "${contents}")
+                foreach (line ${contents})
+                    string(STRIP "${line}" line)
+                    string(REGEX MATCH "[ \\t]*#[ \\t]*include[ \\t]*[\"<](boost/[^\">]*)[\">]" _ "${line}")
+                    if (CMAKE_MATCH_COUNT)
+                        set(header ${CMAKE_MATCH_1})
+                        module_for_header(${header} line_module)
+                        if (line_module)
+                            # Add this header to the list of dependency headers, regardless of the module
+                            if (prune_dependencies AND NOT header IN_LIST included_headers_${line_module})
+                                list(APPEND included_headers_${line_module} ${header})
+                                list(APPEND modules_with_new_headers ${line_module})
+                                # This might mean we have more files to scan right now
+                                set(file_to_scan ${dir}/${header})
+                                if (scanning_include_dir AND line_module STREQUAL module AND NOT file_to_scan IN_LIST scanned_files)
+                                    list(APPEND next_files ${file_to_scan})
+                                endif()
+                            endif()
+
+                            # Include the new module in the list of dependencies for the current module
+                            # This is used to cache the submodule dependencies later
+                            if (NOT line_module IN_LIST module_deps)
+                                list(APPEND module_deps ${line_module})
+                            endif ()
+
+                            # Include the new module in the list of dependencies for the main module
+                            # This is what the main application is worried about
+                            if (NOT line_module IN_LIST deps)
+                                vprint(1 "Adding dependency ${line_module}")
+                                list(PREPEND deps ${line_module} 0)
+                            elseif (NOT line_module IN_LIST moved_deps)
+                                # Even if it was already in the list of dependencies
+                                # we ensure dep comes before the current module to indicate
+                                # a dependency
+                                list(FIND deps ${module} this_idx)
+                                list(FIND deps ${line_module} idx)
+                                if (idx GREATER this_idx)
+                                    vprint(1 "Moving dependency ${line_module} (${file})")
+                                    list(REMOVE_AT deps ${idx})
+                                    list(GET deps ${idx} v)
+                                    list(REMOVE_AT deps ${idx})
+                                    list(PREPEND deps ${line_module} ${v})
+                                    list(APPEND moved_deps ${line_module})
+                                endif ()
                             endif ()
                         endif ()
                     endif ()
-                endif ()
+                endforeach ()
             endforeach ()
-        endforeach ()
+            # If we found new files related to this very same module, we also need to scan them
+            set(files ${next_files})
+            list(APPEND scanned_files ${next_files})
+        endwhile()
 
         # Cache dependencies for this module dir
         if (NOT EXISTS ${cache_file} AND NOT ignore_cache)
@@ -410,12 +460,20 @@ function(FetchBoostContent_Populate name)
 
         # Return new deps to parent scope
         set(DIR_DEPS ${deps} PARENT_SCOPE)
+
+        # Return modules for which we found new headers and which are the new headers
+        set(DIR_MODULES_WITH_NEW_HEADERS ${modules_with_new_headers} PARENT_SCOPE)
+        foreach (module ${modules_with_new_headers})
+            set(DIR_INCLUDED_HEADERS_${module} ${included_headers_${module}} PARENT_SCOPE)
+        endforeach()
     endfunction()
 
     function(scan_module_dependencies module)
         vprint(1 "Scanning module ${module}")
+        set(options SCAN_ALL)
         set(multiValueArgs DEPS DIRS)
-        cmake_parse_arguments(ARG "" "" "${multiValueArgs}" ${ARGN})
+        cmake_parse_arguments(ARG "${options}" "" "${multiValueArgs}" ${ARGN})
+        set(scan_all ${ARG_SCAN_ALL})
         set(deps ${ARG_DEPS})
         set(dirs ${ARG_DIRS})
 
@@ -429,23 +487,52 @@ function(FetchBoostContent_Populate name)
             message(FATAL_ERROR "${${module}_SOURCE_DIR} not found")
         endif ()
 
+        # Scan the include directory last
+        if (include IN_LIST dirs)
+            list(REMOVE_ITEM dirs include)
+            list(APPEND dirs include)
+        endif()
+
         # Scan directories
         foreach (dir ${dirs})
             if (EXISTS ${${module}_SOURCE_DIR}/${dir})
-                scan_directory(${module} ${${module}_SOURCE_DIR}/${dir} DEPS ${ARG_DEPS})
+                if (NOT scan_all AND dir STREQUAL include AND prune_dependencies AND included_headers_${module})
+                    scan_directory(${module} ${${module}_SOURCE_DIR}/${dir} DEPS ${ARG_DEPS} SCAN_ONLY ${included_headers_${module}})
+                else()
+                    scan_directory(${module} ${${module}_SOURCE_DIR}/${dir} DEPS ${ARG_DEPS})
+                endif()
+                # Update deps
                 set(ARG_DEPS ${DIR_DEPS})
+
+                # Update the modules for which we found need headers
+                foreach (module ${DIR_MODULES_WITH_NEW_HEADERS})
+                    if (NOT module IN_LIST modules_with_new_headers)
+                        list(APPEND modules_with_new_headers ${module})
+                    endif()
+                    foreach (header ${DIR_INCLUDED_HEADERS_${module}})
+                        if (NOT header IN_LIST included_headers_${module})
+                            list(APPEND included_headers_${module} ${header})
+                        endif()
+                    endforeach()
+                endforeach()
             endif ()
         endforeach ()
 
         # Return new deps
         set(MODULE_DEPS ${ARG_DEPS} PARENT_SCOPE)
+
+        # Return modules for which we found new headers and which are the new headers
+        set(MODULE_MODULES_WITH_NEW_HEADERS ${modules_with_new_headers} PARENT_SCOPE)
+        foreach (module ${modules_with_new_headers})
+            set(MODULE_INCLUDED_HEADERS_${module} ${included_headers_${module}} PARENT_SCOPE)
+        endforeach ()
     endfunction()
 
     function(fetch_module_dependencies)
         cmake_parse_arguments(ARG "" "" "DEPS" ${ARGN})
         set(deps ${ARG_DEPS})
 
-        # Mark modules as installed in deps
+        # Extract modules to install and mark them as installed in deps
         set(deps_copy ${deps})
         while (deps_copy)
             list(POP_FRONT deps_copy module installed)
@@ -479,12 +566,30 @@ function(FetchBoostContent_Populate name)
         foreach (module ${modules})
             scan_module_dependencies(${module} DEPS ${deps} DIRS include src)
             set(deps ${MODULE_DEPS})
+
+            # Update the modules for which we found need headers
+            # Update the modules for which we found need headers
+            foreach (module ${MODULE_MODULES_WITH_NEW_HEADERS})
+                if (NOT module IN_LIST modules_with_new_headers)
+                    list(APPEND modules_with_new_headers ${module})
+                endif()
+                foreach (header ${MODULE_INCLUDED_HEADERS_${module}})
+                    if (NOT header IN_LIST included_headers_${module})
+                        list(APPEND included_headers_${module} ${header})
+                    endif()
+                endforeach()
+            endforeach()
         endforeach ()
 
         # Return
         list(LENGTH modules modules_size)
         set(MODULES_LENGTH ${modules_size} PARENT_SCOPE)
         set(FETCH_DEPS ${deps} PARENT_SCOPE)
+
+        # Update modules for which we found new headers in the parent context
+        foreach (module ${modules_with_new_headers})
+            set(${included_headers_${module}} ${included_headers_${module}} PARENT_SCOPE)
+        endforeach()
     endfunction()
 
     # Set initial list of modules and dirs
@@ -500,10 +605,11 @@ function(FetchBoostContent_Populate name)
 
     # Scan dependencies of the main library to get dep level 1
     vprint(1 "Directories to scan: ${dirs}")
-    scan_module_dependencies(${module} DEPS ${deps} DIRS ${dirs})
+    # Fix scanning of modules whose headers are not being used
+    scan_module_dependencies(${module} DEPS ${deps} DIRS ${dirs} SCAN_ALL)
+    set(deps ${MODULE_DEPS})
 
     # Remove any deps that should be ignored
-    set(deps ${MODULE_DEPS})
     foreach (dep ${ignore})
         if (dep IN_LIST deps)
             vprint(1 "Ignoring dependency ${dep}")
@@ -511,9 +617,18 @@ function(FetchBoostContent_Populate name)
             if (NOT idx EQUAL -1)
                 list(REMOVE_AT deps ${idx})
                 list(REMOVE_AT deps ${idx})
+                unset(included_headers_${module_with_new_headers})
             endif ()
         endif ()
     endforeach ()
+
+    foreach (module_with_new_headers ${MODULE_MODULES_WITH_NEW_HEADERS})
+        foreach (header ${MODULE_INCLUDED_HEADERS_${module_with_new_headers}})
+            if (NOT header IN_LIST included_headers_${module_with_new_headers})
+                list(APPEND included_headers_${module_with_new_headers} ${header})
+            endif()
+        endforeach()
+    endforeach()
 
     # Fetch dependencies for all other levels
     vprint(2 "Dependencies: ${deps}")
