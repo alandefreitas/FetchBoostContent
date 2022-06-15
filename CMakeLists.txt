@@ -123,6 +123,9 @@ if (NOT boost_url_POPULATED)
     else()
         #[proposal_when_not_found
         # Add all dependencies to Boost::headers, including Boost.URL
+        if (NOT TARGET boost_headers)
+            add_library(boost_headers INTERFACE)
+        endif()
         foreach (dir ${boost_url_SOURCE_DIRS})
             target_include_directories(boost_headers INTERFACE ${dir}/include)
         endforeach()

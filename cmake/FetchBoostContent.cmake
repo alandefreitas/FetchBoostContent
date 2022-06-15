@@ -253,6 +253,7 @@ function(FetchBoostContent_Populate name)
             set(FetchLevel ${FetchLevel} PARENT_SCOPE)
 
             foreach (module ${modules})
+                vprint(1 "Fetch ${module}")
                 __FetchBoostContent_sanitize_name(${module} module)
 
                 # Check properties
@@ -455,7 +456,7 @@ function(FetchBoostContent_Populate name)
 
         # Cache dependencies for this module dir
         if (NOT EXISTS ${cache_file} AND NOT ignore_cache)
-            file(WRITE ${dir}/dependencies.txt "${module_deps}")
+            file(WRITE ${cache_file} "${module_deps}")
         endif ()
 
         # Return new deps to parent scope
@@ -563,23 +564,24 @@ function(FetchBoostContent_Populate name)
         set(BINARY_DIRS ${BINARY_DIRS} PARENT_SCOPE)
 
         # Scan these module dependencies for the next round
-        foreach (module ${modules})
-            scan_module_dependencies(${module} DEPS ${deps} DIRS include src)
-            set(deps ${MODULE_DEPS})
-
-            # Update the modules for which we found need headers
-            # Update the modules for which we found need headers
-            foreach (module ${MODULE_MODULES_WITH_NEW_HEADERS})
-                if (NOT module IN_LIST modules_with_new_headers)
-                    list(APPEND modules_with_new_headers ${module})
-                endif()
-                foreach (header ${MODULE_INCLUDED_HEADERS_${module}})
-                    if (NOT header IN_LIST included_headers_${module})
-                        list(APPEND included_headers_${module} ${header})
+        if (NOT all_retrieved_from_cache)
+            vprint(2 "scan_modules")
+            foreach (module ${modules})
+                scan_module_dependencies(${module} DEPS ${deps} DIRS include src)
+                set(deps ${MODULE_DEPS})
+                # Update the modules for which we found headers we need
+                foreach (module ${MODULE_MODULES_WITH_NEW_HEADERS})
+                    if (NOT module IN_LIST modules_with_new_headers)
+                        list(APPEND modules_with_new_headers ${module})
                     endif()
+                    foreach (header ${MODULE_INCLUDED_HEADERS_${module}})
+                        if (NOT header IN_LIST included_headers_${module})
+                            list(APPEND included_headers_${module} ${header})
+                        endif()
+                    endforeach()
                 endforeach()
-            endforeach()
-        endforeach ()
+            endforeach ()
+        endif()
 
         # Return
         list(LENGTH modules modules_size)
@@ -603,32 +605,59 @@ function(FetchBoostContent_Populate name)
         list(APPEND dirs ${dir})
     endforeach ()
 
-    # Scan dependencies of the main library to get dep level 1
-    vprint(1 "Directories to scan: ${dirs}")
-    # Fix scanning of modules whose headers are not being used
-    scan_module_dependencies(${module} DEPS ${deps} DIRS ${dirs} SCAN_ALL)
-    set(deps ${MODULE_DEPS})
-
-    # Remove any deps that should be ignored
-    foreach (dep ${ignore})
-        if (dep IN_LIST deps)
-            vprint(1 "Ignoring dependency ${dep}")
-            list(FIND deps ${dep} idx)
-            if (NOT idx EQUAL -1)
-                list(REMOVE_AT deps ${idx})
-                list(REMOVE_AT deps ${idx})
-                unset(included_headers_${module_with_new_headers})
-            endif ()
-        endif ()
-    endforeach ()
-
-    foreach (module_with_new_headers ${MODULE_MODULES_WITH_NEW_HEADERS})
-        foreach (header ${MODULE_INCLUDED_HEADERS_${module_with_new_headers}})
-            if (NOT header IN_LIST included_headers_${module_with_new_headers})
-                list(APPEND included_headers_${module_with_new_headers} ${header})
+    # Check if we already have the dependencies in a cache file
+    if (NOT prune_dependencies)
+        set(all_deps_cache_file ${${name}_SOURCE_DIR}/dependencies.txt)
+        set(init_all_deps_cache_file ${all_deps_cache_file})
+        if (NOT EXISTS ${all_deps_cache_file})
+            set(init_all_deps_cache_file ${${name}_SOURCE_DIR}/pruned_dependencies.txt)
+        endif()
+    else()
+        set(all_deps_cache_file ${${name}_SOURCE_DIR}/pruned_dependencies.txt)
+        set(init_all_deps_cache_file ${all_deps_cache_file})
+    endif()
+    if (EXISTS ${init_all_deps_cache_file} AND NOT ignore_cache)
+        if (init_all_deps_cache_file STREQUAL all_deps_cache_file)
+            set(all_retrieved_from_cache TRUE)
+        endif()
+        file(READ ${init_all_deps_cache_file} module_deps)
+        foreach (mod ${module_deps})
+            if (mod STREQUAL module)
+                continue()
             endif()
+            if (NOT mod IN_LIST deps)
+                vprint(1 "Adding dependency ${mod}")
+                list(PREPEND deps ${mod} 0)
+            endif ()
+        endforeach ()
+    else()
+        # Scan dependencies of the main library to get dep level 1
+        vprint(1 "Directories to scan: ${dirs}")
+        # Fix scanning of modules whose headers are not being used
+        scan_module_dependencies(${module} DEPS ${deps} DIRS ${dirs} SCAN_ALL)
+        set(deps ${MODULE_DEPS})
+
+        # Remove any deps that should be ignored
+        foreach (dep ${ignore})
+            if (dep IN_LIST deps)
+                vprint(1 "Ignoring dependency ${dep}")
+                list(FIND deps ${dep} idx)
+                if (NOT idx EQUAL -1)
+                    list(REMOVE_AT deps ${idx})
+                    list(REMOVE_AT deps ${idx})
+                    unset(included_headers_${module_with_new_headers})
+                endif ()
+            endif ()
+        endforeach ()
+
+        foreach (module_with_new_headers ${MODULE_MODULES_WITH_NEW_HEADERS})
+            foreach (header ${MODULE_INCLUDED_HEADERS_${module_with_new_headers}})
+                if (NOT header IN_LIST included_headers_${module_with_new_headers})
+                    list(APPEND included_headers_${module_with_new_headers} ${header})
+                endif()
+            endforeach()
         endforeach()
-    endforeach()
+    endif ()
 
     # Fetch dependencies for all other levels
     vprint(2 "Dependencies: ${deps}")
@@ -663,6 +692,11 @@ function(FetchBoostContent_Populate name)
     endforeach ()
     list(PREPEND SOURCE_DIRS ${all_src_dirs})
     list(PREPEND BINARY_DIRS ${all_bin_dirs})
+
+    # Cache all dependencies for this main module
+    if (NOT EXISTS ${all_deps_cache_file} AND NOT ignore_cache)
+        file(WRITE ${all_deps_cache_file} "${all_deps}")
+    endif ()
 
     # Return directories to the caller
     set(${library}_DEPS ${all_deps} PARENT_SCOPE)
